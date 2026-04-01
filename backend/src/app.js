@@ -12,6 +12,8 @@ app.use('/attendance', require('./routes/attendanceRoutes'));
 app.use('/quiz', require('./routes/quizRoutes'));
 app.use('/marks', require('./routes/marksRoutes'));
 app.use('/assignment', require('./routes/assignmentRoutes'));
+app.use('/course', require('./routes/courseRoutes'));
+app.use('/schedule', require('./routes/scheduleRoutes'));
 
 app.use((err, req, res, next) => {
     console.error(err.stack);

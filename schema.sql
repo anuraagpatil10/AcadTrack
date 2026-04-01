@@ -34,7 +34,8 @@ CREATE TABLE subjects (
 CREATE TABLE enrollments (
     id SERIAL PRIMARY KEY,
     student_id INT REFERENCES students(id),
-    subject_id INT REFERENCES subjects(id)
+    subject_id INT REFERENCES subjects(id),
+    UNIQUE(student_id, subject_id)
 );
 
 CREATE TABLE attendance_sessions (
@@ -44,6 +45,27 @@ CREATE TABLE attendance_sessions (
     start_time TIMESTAMP,
     end_time TIMESTAMP,
     is_valid BOOLEAN
+);
+
+CREATE TABLE class_schedules (
+    id SERIAL PRIMARY KEY,
+    subject_id INT REFERENCES subjects(id) ON DELETE CASCADE,
+    day_of_week INT CHECK (day_of_week BETWEEN 0 AND 6),
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE class_instances (
+    id SERIAL PRIMARY KEY,
+    subject_id INT REFERENCES subjects(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    status VARCHAR(20) CHECK (status IN ('scheduled','cancelled','extra')) DEFAULT 'scheduled',
+    note TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(subject_id, date, start_time)
 );
 
 CREATE TABLE attendance_records (

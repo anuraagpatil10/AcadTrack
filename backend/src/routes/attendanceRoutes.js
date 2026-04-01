@@ -7,6 +7,8 @@ router.post('/start', authMiddleware(['student']), attendanceController.startSes
 router.post('/ping', authMiddleware(['student']), attendanceController.pingSession);
 router.post('/complete', authMiddleware(['student']), attendanceController.completeSession);
 router.get('/student/:id', authMiddleware(['student', 'professor']), attendanceController.getStudentAttendance);
+router.get('/student/:studentId/subject/:subjectId', authMiddleware(['student', 'professor']), attendanceController.getStudentSubjectAttendance);
+router.post('/finalize', authMiddleware(['professor']), attendanceController.finalizeAttendance);
 router.get('/subject/:id', authMiddleware(['professor']), attendanceController.getSubjectAttendance);
 
 module.exports = router;
