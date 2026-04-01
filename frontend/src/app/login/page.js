@@ -19,9 +19,9 @@ export default function Login() {
             Cookies.set('user', JSON.stringify(data.user), { expires: 1 });
             
             if (data.user.role === 'student') {
-                router.push('/student/dashboard');
+                router.push('/student/courses');
             } else {
-                router.push('/professor/dashboard');
+                router.push('/professor/courses');
             }
         } catch (err) {
             setError(err.response?.data?.error || 'Login failed');
