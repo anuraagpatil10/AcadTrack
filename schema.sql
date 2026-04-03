@@ -47,6 +47,31 @@ CREATE TABLE attendance_sessions (
     is_valid BOOLEAN
 );
 
+CREATE TABLE lecture_sessions (
+    id SERIAL PRIMARY KEY,
+    professor_id INT REFERENCES professors(id),
+    subject_id INT REFERENCES subjects(id),
+    start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    end_time TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE professor_location_pings (
+    id SERIAL PRIMARY KEY,
+    lecture_session_id INT REFERENCES lecture_sessions(id) ON DELETE CASCADE,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE student_location_pings (
+    id SERIAL PRIMARY KEY,
+    attendance_session_id INT REFERENCES attendance_sessions(id) ON DELETE CASCADE,
+    latitude DOUBLE PRECISION,
+    longitude DOUBLE PRECISION,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE class_schedules (
     id SERIAL PRIMARY KEY,
     subject_id INT REFERENCES subjects(id) ON DELETE CASCADE,

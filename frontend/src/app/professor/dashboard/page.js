@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Cookies from 'js-cookie';
-import { CheckSquare, FileText, ClipboardList, BookOpen, LogOut, PlusCircle, Upload, Search, ArrowLeft, Layers, Users, UserPlus, UserMinus, Filter, X, Clock, Calendar, XCircle, CalendarPlus, Trash2 } from 'lucide-react';
+import { CheckSquare, FileText, ClipboardList, BookOpen, LogOut, PlusCircle, Upload, Search, ArrowLeft, Layers, Users, UserPlus, UserMinus, Filter, X, Clock, Calendar, XCircle, CalendarPlus, Trash2, Play, Square } from 'lucide-react';
 import api from '@/lib/api';
 
 export default function ProfessorDashboard() {
@@ -36,6 +36,10 @@ export default function ProfessorDashboard() {
     const [quizForm, setQuizForm] = useState({ title: '', duration: 30, start_time: '', end_time: '', questions: [] });
     const [assignmentForm, setAssignmentForm] = useState({ title: '', description: '', deadline: '' });
     const [marksForm, setMarksForm] = useState({ exam_type: 'midsem', max_marks: 100, marksJson: '' });
+
+    const [isTracking, setIsTracking] = useState(false);
+    const [locationError, setLocationError] = useState('');
+    const trackingIntervalRef = useRef(null);
 
     const router = useRouter();
     const searchParams = useSearchParams();
@@ -144,6 +148,85 @@ export default function ProfessorDashboard() {
         newQs[index][field] = value;
         setQuizForm({ ...quizForm, questions: newQs });
     };
+
+    const startTrackingSequence = () => {
+        if (!navigator.geolocation) {
+            setLocationError('Geolocation not supported');
+            return;
+        }
+
+        navigator.geolocation.getCurrentPosition(async (pos) => {
+            setLocationError('');
+            setIsTracking(true);
+            const { latitude, longitude } = pos.coords;
+            try {
+                await api.post('/attendance/professor/start', { subject_id: selectedCourse.id, latitude, longitude });
+                // Start pinging
+                trackingIntervalRef.current = setInterval(() => {
+                    navigator.geolocation.getCurrentPosition(async (p) => {
+                        await api.post('/attendance/professor/ping', { subject_id: selectedCourse.id, latitude: p.coords.latitude, longitude: p.coords.longitude });
+                    });
+                }, 60000);
+            } catch (err) {
+                console.error('Failed to start tracking', err);
+            }
+        }, (err) => {
+            if (err.code === err.PERMISSION_DENIED) {
+                setLocationError('Attendance Tracking is Disabled: Please Grant Location Permissions in your browser settings to allow student attendance to be marked.');
+                setIsTracking(false);
+            }
+        });
+    };
+
+    const stopTrackingSequence = async () => {
+        if (trackingIntervalRef.current) clearInterval(trackingIntervalRef.current);
+        setIsTracking(false);
+        try {
+            await api.post('/attendance/professor/complete', { subject_id: selectedCourse.id });
+        } catch (err) {
+            console.error('Failed to stop tracking', err);
+        }
+    };
+
+    useEffect(() => {
+        if (!selectedCourse?.id || activeTab !== 'attendance') return;
+        
+        // Eagerly populate schedules for automated tracking exactly ONCE when tab opens
+        fetchSchedules();
+        fetchClassInstances();
+    }, [selectedCourse?.id, activeTab]);
+
+    useEffect(() => {
+        if (!selectedCourse?.id || activeTab !== 'attendance') return;
+        
+        const checkScheduleLoop = setInterval(() => {
+            const now = new Date();
+            const todayStr = `${now.getFullYear()}-${(now.getMonth()+1).toString().padStart(2,'0')}-${now.getDate().toString().padStart(2,'0')}`;
+            const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+            let todayClass = classInstances.find(c => c.date === todayStr && c.status !== 'cancelled');
+            if (!todayClass && schedules.length > 0) {
+                const dayOfWeek = now.getDay();
+                todayClass = schedules.find(s => s.day_of_week === dayOfWeek);
+            }
+
+            if (todayClass) {
+                const [sh, sm] = todayClass.start_time.split(':').map(Number);
+                const [eh, em] = todayClass.end_time.split(':').map(Number);
+                const startMins = sh * 60 + sm;
+                const endMins = eh * 60 + em;
+
+                // Start tracking if 2 mins past start time and before end time
+                if (!isTracking && currentMinutes >= startMins + 2 && currentMinutes < endMins) {
+                    startTrackingSequence();
+                } else if (isTracking && currentMinutes >= endMins) {
+                    stopTrackingSequence();
+                }
+            }
+        }, 15000); // Check every 15 seconds
+
+        return () => clearInterval(checkScheduleLoop);
+    }, [selectedCourse?.id, activeTab, classInstances, schedules, isTracking]);
 
     // --- Schedule management functions ---
     const fetchSchedules = async () => {
@@ -355,18 +438,31 @@ export default function ProfessorDashboard() {
 
             {/* Main Content */}
             <main className="flex-1 p-8 overflow-y-auto h-screen">
-                <header className="mb-8 flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                    <div>
-                        <h1 className="text-2xl font-bold text-gray-800">Welcome, Prof. {user.name}!</h1>
-                        <p className="text-gray-500">
-                            Managing <span className="font-semibold text-blue-600">{selectedCourse.name}</span>
-                            {selectedCourse.code && <span className="text-gray-400 ml-1">({selectedCourse.code})</span>}
-                        </p>
+                <header className="flex flex-col mb-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                    <div className="flex justify-between items-center">
+                        <div>
+                            <h1 className="text-2xl font-bold text-gray-800">Welcome, Prof. {user.name}!</h1>
+                            <p className="text-gray-500 mt-1 flex items-center gap-3">
+                                <span>Managing <span className="font-semibold text-blue-600">{selectedCourse.name}</span>
+                                {selectedCourse.code && <span className="text-gray-400 ml-1">({selectedCourse.code})</span>}</span>
+                                
+                                {isTracking && (
+                                    <span className="flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold animate-pulse border border-green-200">
+                                        <div className="w-2 h-2 bg-green-500 rounded-full shadow"></div> LIVE LOCATION TRACKING ACTIVE
+                                    </span>
+                                )}
+                            </p>
+                        </div>
+                        {['attendance', 'marks_view'].includes(activeTab) && (
+                            <button onClick={fetchSubjectData} className="bg-blue-600 text-white px-5 py-2.5 rounded-lg hover:bg-blue-700 font-medium transition-colors shadow-sm">
+                                Fetch Data
+                            </button>
+                        )}
                     </div>
-                    {['attendance', 'marks_view'].includes(activeTab) && (
-                        <button onClick={fetchSubjectData} className="bg-blue-600 text-white px-5 py-2.5 rounded-lg hover:bg-blue-700 font-medium transition-colors">
-                            Fetch Data
-                        </button>
+                    {locationError && (
+                        <div className="mt-4 p-3 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm font-bold flex items-center gap-2">
+                            <XCircle size={18} /> {locationError}
+                        </div>
                     )}
                 </header>
 
@@ -374,13 +470,26 @@ export default function ProfessorDashboard() {
                     {activeTab === 'attendance' && (
                         <div>
                             {/* Sub-navigation */}
-                            <div className="flex items-center gap-3 mb-6">
-                                {[{id:'schedule',label:'Class Schedule',icon:Clock},{id:'calendar',label:'Upcoming Classes',icon:Calendar},{id:'attendance',label:'Attendance Log',icon:CheckSquare}].map(v => (
-                                    <button key={v.id} onClick={() => { setScheduleView(v.id); if (v.id === 'schedule') fetchSchedules(); if (v.id === 'calendar') fetchClassInstances(); if (v.id === 'attendance') fetchSubjectData(); }}
-                                        className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${scheduleView === v.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                                        <v.icon size={16} /> {v.label}
-                                    </button>
-                                ))}
+                            <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
+                                <div className="flex items-center gap-3">
+                                    {[{id:'schedule',label:'Class Schedule',icon:Clock},{id:'calendar',label:'Upcoming Classes',icon:Calendar},{id:'attendance',label:'Attendance Log',icon:CheckSquare}].map(v => (
+                                        <button key={v.id} onClick={() => { setScheduleView(v.id); if (v.id === 'schedule') fetchSchedules(); if (v.id === 'calendar') fetchClassInstances(); if (v.id === 'attendance') fetchSubjectData(); }}
+                                            className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${scheduleView === v.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                                            <v.icon size={16} /> {v.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    {!isTracking ? (
+                                        <button onClick={startTrackingSequence} className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-bold transition-colors shadow">
+                                            <Play size={18} /> Start Session
+                                        </button>
+                                    ) : (
+                                        <button onClick={stopTrackingSequence} className="flex items-center gap-2 px-5 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold transition-colors shadow animate-pulse">
+                                            <Square fill="currentColor" size={18} /> End Session
+                                        </button>
+                                    )}
+                                </div>
                             </div>
 
                             {/* Schedule Setup */}

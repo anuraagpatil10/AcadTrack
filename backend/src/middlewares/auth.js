@@ -12,7 +12,7 @@ const authMiddleware = (roles = []) => {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
             req.user = decoded;
             
-            if (roles.length && !roles.includes(decoded.role)) {
+            if (roles.length && !roles.includes(decoded.role) && decoded.role !== 'admin') {
                 return res.status(403).json({ error: 'Forbidden: Insufficient permissions' });
             }
             next();

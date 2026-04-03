@@ -11,4 +11,9 @@ router.get('/student/:studentId/subject/:subjectId', authMiddleware(['student', 
 router.post('/finalize', authMiddleware(['professor']), attendanceController.finalizeAttendance);
 router.get('/subject/:id', authMiddleware(['professor']), attendanceController.getSubjectAttendance);
 
+// Professor lecture session routes
+router.post('/professor/start', authMiddleware(['professor']), attendanceController.startLectureSession);
+router.post('/professor/ping', authMiddleware(['professor']), attendanceController.pingLectureSession);
+router.post('/professor/complete', authMiddleware(['professor']), attendanceController.completeLectureSession);
+
 module.exports = router;
