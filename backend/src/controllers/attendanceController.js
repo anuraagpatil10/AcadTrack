@@ -35,6 +35,72 @@ async function fetchCurrentDistance(subject_id, latitude, longitude) {
     }
 }
 
+function localDateStr(d = new Date()) {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+async function hasEffectiveClassOnDate(subject_id, dateStr) {
+    const dateObj = new Date(dateStr);
+    const dayOfWeek = dateObj.getDay();
+
+    const scheduleCount = await db.query(
+        'SELECT COUNT(*)::int AS count FROM class_schedules WHERE subject_id = $1 AND day_of_week = $2',
+        [subject_id, dayOfWeek]
+    );
+    const instanceRows = await db.query(
+        `SELECT status, start_time
+         FROM class_instances
+         WHERE subject_id = $1 AND date = $2`,
+        [subject_id, dateStr]
+    );
+
+    const hasExtra = instanceRows.rows.some(r => r.status === 'extra');
+    const cancelledTimes = new Set(
+        instanceRows.rows.filter(r => r.status === 'cancelled').map(r => r.start_time)
+    );
+
+    if (hasExtra) return true;
+
+    const scheduledTotal = Number(scheduleCount.rows[0]?.count || 0);
+    if (scheduledTotal === 0) return false;
+
+    // If every scheduled slot is explicitly cancelled, there is no effective class.
+    const schedules = await db.query(
+        'SELECT start_time FROM class_schedules WHERE subject_id = $1 AND day_of_week = $2',
+        [subject_id, dayOfWeek]
+    );
+    const effectiveScheduled = schedules.rows.filter(s => !cancelledTimes.has(s.start_time));
+    return effectiveScheduled.length > 0;
+}
+
+async function autoMarkAbsentsForSubjectDate(subject_id, dateStr) {
+    const hasClass = await hasEffectiveClassOnDate(subject_id, dateStr);
+    if (!hasClass) {
+        return { marked: 0, skipped: true, reason: 'No scheduled/extra class on this date' };
+    }
+
+    // Insert absents for enrolled students who do not already have attendance for that date.
+    const result = await db.query(
+        `INSERT INTO attendance_records (student_id, subject_id, date, status)
+         SELECT e.student_id, e.subject_id, $2::date, 'absent'
+         FROM enrollments e
+         WHERE e.subject_id = $1
+           AND NOT EXISTS (
+               SELECT 1
+               FROM attendance_records ar
+               WHERE ar.student_id = e.student_id
+                 AND ar.subject_id = e.subject_id
+                 AND ar.date = $2::date
+           )`,
+        [subject_id, dateStr]
+    );
+
+    return { marked: result.rowCount || 0, skipped: false };
+}
+
 // --- Professor Endpoints ---
 exports.startLectureSession = async (req, res) => {
     const { subject_id, latitude, longitude } = req.body;
@@ -92,11 +158,29 @@ exports.pingLectureSession = async (req, res) => {
 exports.completeLectureSession = async (req, res) => {
     const { lecture_session_id } = req.body;
     try {
+        const lectureRes = await db.query(
+            'SELECT subject_id FROM lecture_sessions WHERE id = $1',
+            [lecture_session_id]
+        );
+        if (lectureRes.rows.length === 0) {
+            return res.status(404).json({ error: 'Lecture session not found' });
+        }
+        const subject_id = lectureRes.rows[0].subject_id;
+        const dateStr = localDateStr();
+
         await db.query(
             'UPDATE lecture_sessions SET end_time = CURRENT_TIMESTAMP, is_active = FALSE WHERE id = $1',
             [lecture_session_id]
         );
-        res.status(200).json({ message: 'Lecture session completed' });
+
+        const finalizeInfo = await autoMarkAbsentsForSubjectDate(subject_id, dateStr);
+
+        res.status(200).json({
+            message: 'Lecture session completed',
+            auto_absent_marked: finalizeInfo.marked,
+            auto_absent_skipped: finalizeInfo.skipped || false,
+            auto_absent_reason: finalizeInfo.reason || null
+        });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Server error' });
@@ -259,11 +343,32 @@ exports.completeSession = async (req, res) => {
             status = 'present';
         }
 
-        // Insert into attendance_records
-        await db.query(
-            'INSERT INTO attendance_records (student_id, subject_id, date, status) VALUES ($1, $2, CURRENT_DATE, $3)',
-            [student_id, session.subject_id, status]
+        // Upsert-like behavior without unique constraints:
+        // - If no record exists for today, insert.
+        // - If absent exists and student qualified as present, promote to present.
+        const existing = await db.query(
+            `SELECT id, status
+             FROM attendance_records
+             WHERE student_id = $1 AND subject_id = $2 AND date = CURRENT_DATE
+             ORDER BY id DESC
+             LIMIT 1`,
+            [student_id, session.subject_id]
         );
+
+        if (existing.rows.length === 0) {
+            await db.query(
+                'INSERT INTO attendance_records (student_id, subject_id, date, status) VALUES ($1, $2, CURRENT_DATE, $3)',
+                [student_id, session.subject_id, status]
+            );
+        } else {
+            const currentStatus = existing.rows[0].status;
+            if (currentStatus !== 'present' && status === 'present') {
+                await db.query(
+                    'UPDATE attendance_records SET status = $1 WHERE id = $2',
+                    ['present', existing.rows[0].id]
+                );
+            }
+        }
 
         res.status(200).json({ 
             total_duration: Math.round(totalDurationMins), 
@@ -337,40 +442,12 @@ exports.finalizeAttendance = async (req, res) => {
     const { subject_id, date } = req.body;
 
     try {
-        // Get all enrolled students for this subject
-        const enrolled = await db.query(
-            'SELECT student_id FROM enrollments WHERE subject_id = $1',
-            [subject_id]
-        );
-
-        if (enrolled.rows.length === 0) {
-            return res.status(200).json({ message: 'No enrolled students', marked: 0 });
+        const targetDate = date || localDateStr();
+        const info = await autoMarkAbsentsForSubjectDate(subject_id, targetDate);
+        if (info.skipped) {
+            return res.status(200).json({ message: info.reason, marked: 0, skipped: true });
         }
-
-        // Get students who already have attendance for this date+subject
-        const existing = await db.query(
-            'SELECT student_id FROM attendance_records WHERE subject_id = $1 AND date = $2',
-            [subject_id, date]
-        );
-        const existingSet = new Set(existing.rows.map(r => r.student_id));
-
-        // Find students without a record
-        const absentStudents = enrolled.rows.filter(e => !existingSet.has(e.student_id));
-
-        if (absentStudents.length === 0) {
-            return res.status(200).json({ message: 'All students already have records', marked: 0 });
-        }
-
-        // Bulk insert absent records
-        const values = absentStudents.map((s, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`).join(', ');
-        const params = absentStudents.flatMap(s => [s.student_id, subject_id, date, 'absent']);
-
-        await db.query(
-            `INSERT INTO attendance_records (student_id, subject_id, date, status) VALUES ${values} ON CONFLICT DO NOTHING`,
-            params
-        );
-
-        res.status(200).json({ message: `Marked ${absentStudents.length} student(s) as absent`, marked: absentStudents.length });
+        res.status(200).json({ message: `Marked ${info.marked} student(s) as absent`, marked: info.marked, skipped: false });
     } catch (err) {
         console.error('Finalize Attendance Error:', err);
         res.status(500).json({ error: 'Failed to finalize attendance' });

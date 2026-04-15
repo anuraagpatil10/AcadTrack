@@ -147,7 +147,7 @@ CREATE TABLE quiz_violations (
 CREATE TABLE exams (
     id SERIAL PRIMARY KEY,
     subject_id INT REFERENCES subjects(id),
-    exam_type VARCHAR(20) CHECK (exam_type IN ('midsem', 'endsem')),
+    exam_type VARCHAR(20) CHECK (exam_type IN ('midsem', 'endsem', 'quiz', 'assignment', 'practical')),
     max_marks INT
 );
 
@@ -172,6 +172,8 @@ CREATE TABLE submissions (
     assignment_id INT REFERENCES assignments(id),
     student_id INT REFERENCES students(id),
     file_url TEXT,
+    code_language VARCHAR(30),
+    code_text TEXT,
     submitted_at TIMESTAMP,
     is_late BOOLEAN,
     similarity_score FLOAT,
