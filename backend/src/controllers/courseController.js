@@ -167,7 +167,16 @@ exports.unenrollStudent = async (req, res) => {
 // GET /course/my-enrolled-courses — fetch courses a student is enrolled in
 exports.getStudentCourses = async (req, res) => {
     try {
-        const studentId = req.user.role_id;
+        const studentRes = await db.query(
+            'SELECT id FROM students WHERE user_id = $1',
+            [req.user.user_id]
+        );
+
+        if (studentRes.rows.length === 0) {
+            return res.status(404).json({ error: 'Student profile not found' });
+        }
+
+        const studentId = studentRes.rows[0].id;
         const result = await db.query(
             `SELECT s.id, s.name, s.code, u.name AS professor_name
              FROM enrollments e

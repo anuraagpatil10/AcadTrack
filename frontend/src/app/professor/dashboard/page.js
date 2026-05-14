@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Cookies from 'js-cookie';
 import { CheckSquare, FileText, ClipboardList, BookOpen, LogOut, PlusCircle, Upload, Search, ArrowLeft, Layers, Users, UserPlus, UserMinus, Filter, X, Clock, Calendar, XCircle, CalendarPlus, Trash2, Play, Square, AlertTriangle, BarChart2, Eye, Shield, List, ChevronRight, Trophy, Award, Target, Hash, TrendingUp, TrendingDown } from 'lucide-react';
 import api from '@/lib/api';
+import { clearSession, getStoredCourse, getStoredUser } from '@/lib/auth';
 
 export default function ProfessorDashboard() {
+    const finalGradeOrder = ['AA', 'AB', 'BB', 'BC', 'CC', 'CD', 'DD', 'DE', 'F'];
     const [user, setUser] = useState(null);
     const [activeTab, setActiveTab] = useState('attendance');
     const [selectedCourse, setSelectedCourse] = useState(null);
@@ -57,6 +58,9 @@ export default function ProfessorDashboard() {
     const [marksStudentData, setMarksStudentData] = useState([]);
     const [marksUploading, setMarksUploading] = useState(false);
     const [marksSubView, setMarksSubView] = useState('upload'); // 'upload' | 'analytics'
+    const [gradingSchemaDraft, setGradingSchemaDraft] = useState({ components: [], ranges: [] });
+    const [gradingSaving, setGradingSaving] = useState(false);
+    const [gradesReleasing, setGradesReleasing] = useState(false);
 
     const [isTracking, setIsTracking] = useState(false);
     const [locationError, setLocationError] = useState('');
@@ -68,8 +72,11 @@ export default function ProfessorDashboard() {
     const searchParams = useSearchParams();
 
     useEffect(() => {
-        const u = Cookies.get('user');
-        if (!u) return router.push('/login');
+        const u = getStoredUser();
+        if (!u) {
+            clearSession();
+            return router.push('/login');
+        }
         const parsed = JSON.parse(u);
         if (parsed.role !== 'professor') return router.push('/student/courses');
         setUser(parsed);
@@ -82,7 +89,7 @@ export default function ProfessorDashboard() {
         }
 
         // Get course details from cookie
-        const courseData = Cookies.get('selectedCourse');
+        const courseData = getStoredCourse();
         if (courseData) {
             try {
                 setSelectedCourse(JSON.parse(courseData));
@@ -96,15 +103,41 @@ export default function ProfessorDashboard() {
 
     const subjectId = searchParams.get('subjectId');
 
-    const fetchSubjectData = async () => {
+    const buildGradingDraft = (grading, exams = []) => {
+        const schema = grading?.schema;
+        const componentMap = new Map((schema?.components || []).map((component) => [component.exam_type, component]));
+
+        const components = exams.map((exam, index) => {
+            const saved = componentMap.get(exam.exam_type);
+            return {
+                exam_type: exam.exam_type,
+                enabled: Boolean(saved),
+                weight_percentage: saved?.weight_percentage ?? 0,
+                display_order: saved?.display_order ?? index,
+            };
+        });
+
+        const rangeMap = new Map((schema?.ranges || []).map((range) => [range.grade_code, range]));
+        const ranges = finalGradeOrder.map((gradeCode, index) => ({
+            grade_code: gradeCode,
+            min_score: rangeMap.get(gradeCode)?.min_score ?? 0,
+            max_score: rangeMap.get(gradeCode)?.max_score ?? 0,
+            display_order: rangeMap.get(gradeCode)?.display_order ?? index,
+        }));
+
+        return { components, ranges };
+    };
+
+    const fetchSubjectData = async (tabOverride = activeTab) => {
         if (!subjectId) return alert('No subject selected');
         try {
-            if (activeTab === 'attendance') {
+            if (tabOverride === 'attendance') {
                 const { data } = await api.get(`/attendance/subject/${subjectId}`);
                 setAttendanceData(data);
-            } else if (activeTab === 'marks_view') {
+            } else if (tabOverride === 'marks_view') {
                 const { data } = await api.get(`/marks/subject/${subjectId}`);
                 setMarksData(data);
+                setGradingSchemaDraft(buildGradingDraft(data.grading, data.exams || []));
             }
         } catch (err) {
             console.error(err);
@@ -241,6 +274,99 @@ export default function ProfessorDashboard() {
         setMarksStudentData(prev => prev.map(s =>
             s.student_id === studentId ? { ...s, marks_obtained: value } : s
         ));
+    };
+
+    const updateGradingComponent = (examType, patch) => {
+        setGradingSchemaDraft((prev) => ({
+            ...prev,
+            components: prev.components.map((component) => (
+                component.exam_type === examType ? { ...component, ...patch } : component
+            )),
+        }));
+    };
+
+    const updateGradeRange = (gradeCode, field, value) => {
+        setGradingSchemaDraft((prev) => ({
+            ...prev,
+            ranges: prev.ranges.map((range) => (
+                range.grade_code === gradeCode ? { ...range, [field]: value } : range
+            )),
+        }));
+    };
+
+    const autoDistributeWeights = () => {
+        setGradingSchemaDraft((prev) => {
+            const enabledComponents = prev.components.filter((component) => component.enabled);
+            if (!enabledComponents.length) return prev;
+
+            const even = Number((100 / enabledComponents.length).toFixed(2));
+            let consumed = 0;
+
+            const components = prev.components.map((component, index) => {
+                if (!component.enabled) {
+                    return { ...component, weight_percentage: 0 };
+                }
+
+                const isLastEnabled = enabledComponents[enabledComponents.length - 1].exam_type === component.exam_type;
+                const weight = isLastEnabled ? Number((100 - consumed).toFixed(2)) : even;
+                consumed += isLastEnabled ? 0 : even;
+
+                return {
+                    ...component,
+                    weight_percentage: weight,
+                    display_order: index,
+                };
+            });
+
+            return { ...prev, components };
+        });
+    };
+
+    const handleSaveGradingSchema = async () => {
+        if (!subjectId) return;
+
+        const components = gradingSchemaDraft.components
+            .filter((component) => component.enabled)
+            .map((component, index) => ({
+                exam_type: component.exam_type,
+                weight_percentage: Number(component.weight_percentage || 0),
+                display_order: index,
+            }));
+
+        const ranges = gradingSchemaDraft.ranges.map((range, index) => ({
+            grade_code: range.grade_code,
+            min_score: Number(range.min_score),
+            max_score: Number(range.max_score),
+            display_order: index,
+        }));
+
+        setGradingSaving(true);
+        try {
+            const { data } = await api.put(`/marks/subject/${subjectId}/grading-schema`, { components, ranges });
+            setMarksData((prev) => prev ? { ...prev, grading: data.grading } : prev);
+            setGradingSchemaDraft(buildGradingDraft(data.grading, marksData?.exams || []));
+            alert('Grading schema saved. Final grades are hidden until you release them again.');
+        } catch (err) {
+            alert(err?.response?.data?.error || 'Failed to save grading schema');
+        } finally {
+            setGradingSaving(false);
+        }
+    };
+
+    const handleToggleGradeRelease = async (shouldRelease) => {
+        if (!subjectId) return;
+        setGradesReleasing(true);
+        try {
+            const endpoint = shouldRelease ? 'release' : 'unrelease';
+            const { data } = await api.post(`/marks/subject/${subjectId}/${endpoint}`);
+            setMarksData((prev) => prev ? { ...prev, grading: data.grading } : prev);
+            setGradingSchemaDraft(buildGradingDraft(data.grading, marksData?.exams || []));
+            alert(shouldRelease ? 'Grades released to students.' : 'Grades are now hidden from students.');
+        } catch (err) {
+            alert(err?.response?.data?.error || 'Failed to update release status');
+        } finally {
+            setGradesReleasing(false);
+        }
     };
 
     const addQuestion = () => {
@@ -549,6 +675,9 @@ export default function ProfessorDashboard() {
                                     fetchQuizzes();
                                     setQuizSubView('list');
                                 }
+                                if (t.id === 'marks_view') {
+                                    fetchSubjectData('marks_view');
+                                }
                             }}
                             className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-colors text-left ${activeTab === t.id ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}
                         >
@@ -557,7 +686,7 @@ export default function ProfessorDashboard() {
                     ))}
                 </nav>
                 <div className="p-4 border-t">
-                    <button onClick={() => { Cookies.remove('token'); Cookies.remove('user'); Cookies.remove('selectedCourse'); router.push('/login'); }} className="w-full flex items-center gap-3 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg">
+                    <button onClick={() => { clearSession(); router.push('/login'); }} className="w-full flex items-center gap-3 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg">
                         <LogOut size={20} /> Log Out
                     </button>
                 </div>
@@ -1314,13 +1443,220 @@ export default function ProfessorDashboard() {
                                     <BarChart2 size={40} className="mx-auto mb-3 opacity-30" />
                                     <p>Click "Refresh Data" to load analytics.</p>
                                 </div>
-                            ) : Object.keys(marksData.analytics).length === 0 ? (
-                                <div className="text-center py-12 text-gray-400">
-                                    <BookOpen size={40} className="mx-auto mb-3 opacity-30" />
-                                    <p>No marks data available. Upload marks first.</p>
-                                </div>
                             ) : (
                                 <div className="space-y-6">
+                                    <div className="bg-white border rounded-xl p-6">
+                                        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                                            <div>
+                                                <h4 className="text-lg font-bold text-gray-800">Final Course Grading Schema</h4>
+                                                <p className="text-sm text-gray-500 mt-1">
+                                                    Configure weighted combined marks and the final AA to F grade ranges before releasing grades.
+                                                </p>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <span className={`px-3 py-1.5 rounded-full text-xs font-bold ${
+                                                    marksData.grading?.schema?.is_released
+                                                        ? 'bg-emerald-100 text-emerald-700'
+                                                        : 'bg-amber-100 text-amber-700'
+                                                }`}>
+                                                    {marksData.grading?.schema?.is_released ? 'Released to Students' : 'Not Released'}
+                                                </span>
+                                                <button
+                                                    onClick={handleSaveGradingSchema}
+                                                    disabled={gradingSaving}
+                                                    className="bg-blue-600 text-white px-4 py-2.5 rounded-lg hover:bg-blue-700 font-medium transition-colors text-sm disabled:opacity-50"
+                                                >
+                                                    {gradingSaving ? 'Saving...' : 'Save Schema'}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleToggleGradeRelease(!marksData.grading?.schema?.is_released)}
+                                                    disabled={gradesReleasing || !marksData.grading?.release_ready}
+                                                    className={`px-4 py-2.5 rounded-lg font-medium transition-colors text-sm disabled:opacity-50 ${
+                                                        marksData.grading?.schema?.is_released
+                                                            ? 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                                                            : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                                                    }`}
+                                                >
+                                                    {gradesReleasing
+                                                        ? 'Updating...'
+                                                        : marksData.grading?.schema?.is_released
+                                                            ? 'Hide Grades'
+                                                            : 'Release Grades'}
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mt-6">
+                                            <div className="border rounded-xl p-5 bg-slate-50">
+                                                <div className="flex items-center justify-between mb-4">
+                                                    <div>
+                                                        <h5 className="font-bold text-gray-800">Combined Score Components</h5>
+                                                        <p className="text-xs text-gray-500 mt-1">Enable the marks buckets that should count for the final result.</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={autoDistributeWeights}
+                                                        className="px-3 py-2 rounded-lg bg-white border text-sm text-gray-700 hover:bg-gray-50"
+                                                    >
+                                                        Auto Split
+                                                    </button>
+                                                </div>
+                                                <div className="space-y-3">
+                                                    {gradingSchemaDraft.components.map((component) => {
+                                                        const examMeta = marksData.exams.find((exam) => exam.exam_type === component.exam_type);
+                                                        return (
+                                                            <div key={component.exam_type} className="flex items-center gap-3 p-3 bg-white border rounded-xl">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    className="w-4 h-4 accent-blue-600"
+                                                                    checked={component.enabled}
+                                                                    onChange={(e) => updateGradingComponent(component.exam_type, {
+                                                                        enabled: e.target.checked,
+                                                                        weight_percentage: e.target.checked ? (component.weight_percentage || 0) : 0,
+                                                                    })}
+                                                                />
+                                                                <div className="flex-1">
+                                                                    <p className="font-semibold text-gray-800 capitalize">{component.exam_type}</p>
+                                                                    <p className="text-xs text-gray-500">Max marks: {examMeta?.max_marks ?? '-'}</p>
+                                                                </div>
+                                                                <div className="w-28">
+                                                                    <label className="block text-[11px] font-medium text-gray-500 mb-1">Weight %</label>
+                                                                    <input
+                                                                        type="number"
+                                                                        min="0"
+                                                                        max="100"
+                                                                        step="0.01"
+                                                                        disabled={!component.enabled}
+                                                                        value={component.weight_percentage}
+                                                                        onChange={(e) => updateGradingComponent(component.exam_type, { weight_percentage: e.target.value })}
+                                                                        className="w-full border rounded-lg px-3 py-2 text-sm bg-white disabled:bg-gray-100"
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                                <div className="mt-4 flex items-center justify-between text-sm">
+                                                    <span className="text-gray-500">Total Weight</span>
+                                                    <span className={`font-bold ${
+                                                        Math.abs(gradingSchemaDraft.components
+                                                            .filter((component) => component.enabled)
+                                                            .reduce((sum, component) => sum + Number(component.weight_percentage || 0), 0) - 100) < 0.01
+                                                            ? 'text-emerald-600'
+                                                            : 'text-red-600'
+                                                    }`}>
+                                                        {gradingSchemaDraft.components
+                                                            .filter((component) => component.enabled)
+                                                            .reduce((sum, component) => sum + Number(component.weight_percentage || 0), 0)
+                                                            .toFixed(2)}%
+                                                    </span>
+                                                </div>
+                                            </div>
+
+                                            <div className="border rounded-xl p-5 bg-slate-50">
+                                                <h5 className="font-bold text-gray-800 mb-1">Grade Ranges</h5>
+                                                <p className="text-xs text-gray-500 mb-4">These cutoffs are applied to the combined score preview and release.</p>
+                                                <div className="space-y-3">
+                                                    {gradingSchemaDraft.ranges.map((range) => (
+                                                        <div key={range.grade_code} className="grid grid-cols-[80px_1fr_1fr] gap-3 items-end p-3 bg-white border rounded-xl">
+                                                            <div>
+                                                                <label className="block text-[11px] font-medium text-gray-500 mb-1">Grade</label>
+                                                                <div className="px-3 py-2 rounded-lg bg-slate-900 text-white text-sm font-bold text-center">{range.grade_code}</div>
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-[11px] font-medium text-gray-500 mb-1">Min</label>
+                                                                <input
+                                                                    type="number"
+                                                                    min="0"
+                                                                    max="100"
+                                                                    step="0.01"
+                                                                    value={range.min_score}
+                                                                    onChange={(e) => updateGradeRange(range.grade_code, 'min_score', e.target.value)}
+                                                                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                                                                />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-[11px] font-medium text-gray-500 mb-1">Max</label>
+                                                                <input
+                                                                    type="number"
+                                                                    min="0"
+                                                                    max="100"
+                                                                    step="0.01"
+                                                                    value={range.max_score}
+                                                                    onChange={(e) => updateGradeRange(range.grade_code, 'max_score', e.target.value)}
+                                                                    className="w-full border rounded-lg px-3 py-2 text-sm"
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-6">
+                                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
+                                                <p className="text-2xl font-bold text-blue-700">{marksData.grading?.analytics?.average?.toFixed(1) ?? '0.0'}</p>
+                                                <p className="text-xs text-blue-500 font-medium">Combined Avg</p>
+                                            </div>
+                                            <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 text-center">
+                                                <p className="text-2xl font-bold text-purple-700">{marksData.grading?.analytics?.median?.toFixed(1) ?? '0.0'}</p>
+                                                <p className="text-xs text-purple-500 font-medium">Median</p>
+                                            </div>
+                                            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+                                                <p className="text-2xl font-bold text-emerald-700">{marksData.grading?.analytics?.max?.toFixed(1) ?? '0.0'}</p>
+                                                <p className="text-xs text-emerald-500 font-medium">Highest</p>
+                                            </div>
+                                            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-center">
+                                                <p className="text-2xl font-bold text-rose-700">{marksData.grading?.analytics?.min?.toFixed(1) ?? '0.0'}</p>
+                                                <p className="text-xs text-rose-500 font-medium">Lowest</p>
+                                            </div>
+                                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
+                                                <p className="text-2xl font-bold text-amber-700">{marksData.grading?.analytics?.std_dev?.toFixed(1) ?? '0.0'}</p>
+                                                <p className="text-xs text-amber-500 font-medium">Std. Dev.</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                                            <div className="bg-slate-50 rounded-xl p-5">
+                                                <h5 className="font-bold text-sm text-gray-700 mb-3">Preview Grade Distribution</h5>
+                                                <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+                                                    {finalGradeOrder.map((grade) => (
+                                                        <div key={grade} className="bg-white border rounded-xl p-3 text-center">
+                                                            <p className="text-xs font-bold text-gray-500">{grade}</p>
+                                                            <p className="text-2xl font-bold text-gray-800 mt-1">
+                                                                {marksData.grading?.analytics?.grade_distribution?.[grade] ?? 0}
+                                                            </p>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-slate-50 rounded-xl p-5">
+                                                <h5 className="font-bold text-sm text-gray-700 mb-3">Combined Score Distribution</h5>
+                                                <div className="flex items-end gap-2 h-32">
+                                                    {(marksData.grading?.analytics?.score_distribution || []).map((bucket) => {
+                                                        const counts = (marksData.grading?.analytics?.score_distribution || []).map((item) => item.count);
+                                                        const maxCount = Math.max(...counts, 1);
+                                                        const height = bucket.count > 0 ? Math.max((bucket.count / maxCount) * 100, 6) : 4;
+                                                        return (
+                                                            <div key={bucket.range} className="flex-1 flex flex-col items-center justify-end gap-1">
+                                                                {bucket.count > 0 && <span className="text-xs font-bold text-gray-500">{bucket.count}</span>}
+                                                                <div className="w-full bg-indigo-500 rounded-t-md" style={{ height: `${height}%` }} />
+                                                                <span className="text-[10px] text-gray-400 -rotate-45 origin-top-left">{bucket.range}</span>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {Object.keys(marksData.analytics).length === 0 && (
+                                        <div className="text-center py-12 text-gray-400">
+                                            <BookOpen size={40} className="mx-auto mb-3 opacity-30" />
+                                            <p>No exam-wise marks analytics available yet. Upload marks to populate this section.</p>
+                                        </div>
+                                    )}
+
                                     {/* Per exam type analytics */}
                                     {Object.entries(marksData.analytics).map(([type, stats]) => (
                                         <div key={type} className="bg-white border rounded-xl p-6">
@@ -1455,6 +1791,52 @@ export default function ProfessorDashboard() {
                                             )}
                                         </div>
                                     ))}
+
+                                    <div className="bg-white border rounded-xl p-6">
+                                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                                            <div>
+                                                <h4 className="text-lg font-bold text-gray-800">Final Grade Preview</h4>
+                                                <p className="text-sm text-gray-500">This is the course grade sheet students will see after release.</p>
+                                            </div>
+                                            <div className="text-sm text-gray-500">
+                                                Students missing any component: <span className="font-bold text-gray-800">{marksData.grading?.analytics?.missing_any_component ?? 0}</span>
+                                            </div>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left border-collapse">
+                                                <thead>
+                                                    <tr className="bg-gray-100">
+                                                        <th className="p-3 border text-sm">Rank</th>
+                                                        <th className="p-3 border text-sm">Roll No</th>
+                                                        <th className="p-3 border text-sm">Name</th>
+                                                        <th className="p-3 border text-sm text-center">Combined Score</th>
+                                                        <th className="p-3 border text-sm text-center">Grade</th>
+                                                        <th className="p-3 border text-sm text-center">Missing</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {(marksData.grading?.combined_scores || []).map((student) => (
+                                                        <tr key={student.student_id} className="hover:bg-gray-50">
+                                                            <td className="p-3 border font-semibold text-gray-700">#{student.rank}</td>
+                                                            <td className="p-3 border font-mono text-sm">{student.roll_no}</td>
+                                                            <td className="p-3 border font-medium">{student.student_name}</td>
+                                                            <td className="p-3 border text-center font-bold text-indigo-700">{student.final_percentage.toFixed(2)}</td>
+                                                            <td className="p-3 border text-center">
+                                                                <span className="px-3 py-1 rounded-full bg-slate-900 text-white text-xs font-bold">
+                                                                    {student.grade_code || '-'}
+                                                                </span>
+                                                            </td>
+                                                            <td className="p-3 border text-center">
+                                                                <span className={`font-bold ${student.missing_components > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                                                    {student.missing_components}
+                                                                </span>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
 
                                     {/* Full Student Marks Table */}
                                     <div className="bg-white border rounded-xl p-6">

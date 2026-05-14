@@ -2,10 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import Cookies from 'js-cookie';
 import { CheckSquare, FileText, ClipboardList, BookOpen, LogOut, ArrowLeft, Layers, TrendingUp, Calendar, Award, Target, Trophy, Hash, Upload, AlertCircle, Clock, ExternalLink } from 'lucide-react';
 import AttendanceTracker from '@/components/AttendanceTracker';
 import api from '@/lib/api';
+import { clearSession, getStoredCourse, getStoredUser } from '@/lib/auth';
 
 export default function StudentDashboard() {
     const [user, setUser] = useState(null);
@@ -31,8 +31,11 @@ export default function StudentDashboard() {
     const searchParams = useSearchParams();
 
     useEffect(() => {
-        const u = Cookies.get('user');
-        if (!u) return router.push('/login');
+        const u = getStoredUser();
+        if (!u) {
+            clearSession();
+            return router.push('/login');
+        }
         const parsed = JSON.parse(u);
         if (parsed.role !== 'student') return router.push('/professor/courses');
         setUser(parsed);
@@ -44,7 +47,7 @@ export default function StudentDashboard() {
         }
 
         // Get course details from cookie
-        const courseData = Cookies.get('selectedCourse');
+        const courseData = getStoredCourse();
         if (courseData) {
             try {
                 setSelectedCourse(JSON.parse(courseData));
@@ -88,6 +91,14 @@ export default function StudentDashboard() {
 
     const getGradeColor = (grade) => {
         const colors = {
+            'AA': { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-300' },
+            'AB': { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-300' },
+            'BB': { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300' },
+            'BC': { bg: 'bg-sky-100', text: 'text-sky-700', border: 'border-sky-300' },
+            'CC': { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-300' },
+            'CD': { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-300' },
+            'DD': { bg: 'bg-rose-100', text: 'text-rose-700', border: 'border-rose-300' },
+            'DE': { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-300' },
             'A+': { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-300' },
             'A': { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-300' },
             'B+': { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300' },
@@ -281,7 +292,7 @@ export default function StudentDashboard() {
                     ))}
                 </nav>
                 <div className="p-4 border-t">
-                    <button onClick={() => { Cookies.remove('token'); Cookies.remove('user'); Cookies.remove('selectedCourse'); router.push('/login'); }} className="w-full flex items-center gap-3 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg">
+                    <button onClick={() => { clearSession(); router.push('/login'); }} className="w-full flex items-center gap-3 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg">
                         <LogOut size={20} /> Log Out
                     </button>
                 </div>
@@ -666,6 +677,58 @@ export default function StudentDashboard() {
 
                     {activeTab === 'marks' && (
                         <div className="space-y-6">
+                            <div className="bg-white rounded-xl shadow-sm border p-6">
+                                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                                    <div>
+                                        <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                                            <Award size={20} className="text-amber-500" /> Final Course Grade
+                                        </h3>
+                                        <p className="text-sm text-gray-500 mt-1">
+                                            Final grades are visible only after your professor releases them for this course.
+                                        </p>
+                                    </div>
+                                    {marksReport?.final_grade?.released ? (
+                                        <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-700">
+                                            Released
+                                        </span>
+                                    ) : (
+                                        <span className="px-3 py-1.5 rounded-full text-xs font-bold bg-amber-100 text-amber-700">
+                                            Awaiting Release
+                                        </span>
+                                    )}
+                                </div>
+
+                                {marksReport?.final_grade?.released ? (
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-6">
+                                        <div className="bg-slate-50 rounded-xl p-5 text-center">
+                                            <p className="text-xs text-slate-500 font-medium mb-2">Final Grade</p>
+                                            <div className={`inline-flex px-4 py-2 rounded-xl text-2xl font-bold border ${getGradeColor(marksReport.final_grade.grade_code).bg} ${getGradeColor(marksReport.final_grade.grade_code).text} ${getGradeColor(marksReport.final_grade.grade_code).border}`}>
+                                                {marksReport.final_grade.grade_code}
+                                            </div>
+                                        </div>
+                                        <div className="bg-slate-50 rounded-xl p-5 text-center">
+                                            <p className="text-xs text-slate-500 font-medium mb-2">Combined Score</p>
+                                            <p className="text-3xl font-bold text-indigo-600">{marksReport.final_grade.final_percentage?.toFixed(2)}</p>
+                                        </div>
+                                        <div className="bg-slate-50 rounded-xl p-5 text-center">
+                                            <p className="text-xs text-slate-500 font-medium mb-2">Rank</p>
+                                            <p className="text-3xl font-bold text-gray-800">
+                                                #{marksReport.final_grade.rank}
+                                                <span className="text-sm font-normal text-gray-400">/{marksReport.final_grade.total_students}</span>
+                                            </p>
+                                        </div>
+                                        <div className="bg-slate-50 rounded-xl p-5 text-center">
+                                            <p className="text-xs text-slate-500 font-medium mb-2">Class Average</p>
+                                            <p className="text-3xl font-bold text-emerald-600">{marksReport.final_grade.class_average?.toFixed(1)}</p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="mt-6 p-5 rounded-xl border border-dashed text-sm text-gray-500 bg-slate-50">
+                                        Your professor has not released final grades for this course yet. You can still review individual exam scores below.
+                                    </div>
+                                )}
+                            </div>
+
                             {/* Subject Report Card */}
                             {marksReportLoading ? (
                                 <div className="flex items-center justify-center py-12 bg-white rounded-xl border">

@@ -158,6 +158,35 @@ CREATE TABLE marks (
     marks_obtained INT
 );
 
+CREATE TABLE grading_schemas (
+    id SERIAL PRIMARY KEY,
+    subject_id INT UNIQUE REFERENCES subjects(id) ON DELETE CASCADE,
+    is_released BOOLEAN DEFAULT FALSE,
+    released_at TIMESTAMP,
+    created_by INT REFERENCES professors(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE grading_schema_components (
+    id SERIAL PRIMARY KEY,
+    schema_id INT REFERENCES grading_schemas(id) ON DELETE CASCADE,
+    exam_type VARCHAR(20) CHECK (exam_type IN ('midsem', 'endsem', 'quiz', 'assignment', 'practical')),
+    weight_percentage NUMERIC(5,2) NOT NULL CHECK (weight_percentage >= 0 AND weight_percentage <= 100),
+    display_order INT DEFAULT 0,
+    UNIQUE(schema_id, exam_type)
+);
+
+CREATE TABLE grading_schema_ranges (
+    id SERIAL PRIMARY KEY,
+    schema_id INT REFERENCES grading_schemas(id) ON DELETE CASCADE,
+    grade_code VARCHAR(2) CHECK (grade_code IN ('AA', 'AB', 'BB', 'BC', 'CC', 'CD', 'DD', 'DE', 'F')),
+    min_score NUMERIC(5,2) NOT NULL CHECK (min_score >= 0 AND min_score <= 100),
+    max_score NUMERIC(5,2) NOT NULL CHECK (max_score >= 0 AND max_score <= 100),
+    display_order INT DEFAULT 0,
+    UNIQUE(schema_id, grade_code)
+);
+
 CREATE TABLE assignments (
     id SERIAL PRIMARY KEY,
     subject_id INT REFERENCES subjects(id),

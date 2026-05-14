@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import Cookies from 'js-cookie';
 import { BookOpen, ArrowRight, Layers, LogOut, GraduationCap } from 'lucide-react';
 import api from '@/lib/api';
+import { clearSession, getStoredToken, getStoredUser, setSelectedCourse } from '@/lib/auth';
 
 export default function StudentCourses() {
     const [user, setUser] = useState(null);
@@ -22,9 +22,19 @@ export default function StudentCourses() {
     ];
 
     useEffect(() => {
-        const u = Cookies.get('user');
-        if (!u) return router.push('/login');
+        const u = getStoredUser();
+        const token = getStoredToken();
+        console.log('[student/courses] guard', {
+            hasUser: Boolean(u),
+            hasToken: Boolean(token),
+            path: typeof window !== 'undefined' ? window.location.pathname : 'server',
+        });
+        if (!u || !token) {
+            clearSession();
+            return router.push('/login');
+        }
         const parsed = JSON.parse(u);
+        console.log('[student/courses] parsed_user', parsed);
         if (parsed.role !== 'student') return router.push('/professor/courses');
         setUser(parsed);
         fetchCourses();
@@ -33,23 +43,25 @@ export default function StudentCourses() {
     const fetchCourses = async () => {
         try {
             const { data } = await api.get('/course/my-enrolled-courses');
+            console.log('[student/courses] fetchCourses:success', data);
             setCourses(data);
         } catch (err) {
             console.error('Failed to fetch courses', err);
+            if (err?.response?.status === 401) {
+                return;
+            }
         } finally {
             setLoading(false);
         }
     };
 
     const handleSelectCourse = (course) => {
-        Cookies.set('selectedCourse', JSON.stringify(course), { expires: 1 });
+        setSelectedCourse(course);
         router.push(`/student/dashboard?subjectId=${course.id}`);
     };
 
     const handleLogout = () => {
-        Cookies.remove('token');
-        Cookies.remove('user');
-        Cookies.remove('selectedCourse');
+        clearSession();
         router.push('/login');
     };
 

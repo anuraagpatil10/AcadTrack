@@ -42,11 +42,22 @@ exports.register = async (req, res) => {
 };
 
 exports.login = async (req, res) => {
-    const { email, password } = req.body;
+    const email = req.body?.email?.trim();
+    const password = req.body?.password;
 
     try {
-        const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+        console.log('[login] attempt', { email });
+        if (!email || !password) {
+            console.log('[login] missing_fields', { emailPresent: Boolean(email), passwordPresent: Boolean(password) });
+            return res.status(400).json({ error: 'Email and password are required' });
+        }
+
+        const result = await db.query(
+            'SELECT * FROM users WHERE LOWER(email) = LOWER($1)',
+            [email]
+        );
         if (result.rows.length === 0) {
+            console.log('[login] user_not_found', { email });
             return res.status(404).json({ error: 'User not found' });
         }
 
@@ -54,6 +65,7 @@ exports.login = async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
 
         if (!isMatch) {
+            console.log('[login] invalid_password', { email, user_id: user.id, role: user.role });
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
@@ -62,10 +74,18 @@ exports.login = async (req, res) => {
 
         if (user.role === 'student') {
             const studentRes = await db.query('SELECT id FROM students WHERE user_id = $1', [user.id]);
+            if (studentRes.rows.length === 0) {
+                console.log('[login] missing_student_profile', { email, user_id: user.id });
+                return res.status(500).json({ error: 'Student profile is missing for this account' });
+            }
             id = studentRes.rows[0]?.id;
             details = { student_id: id };
         } else if (user.role === 'professor') {
             const profRes = await db.query('SELECT id FROM professors WHERE user_id = $1', [user.id]);
+            if (profRes.rows.length === 0) {
+                console.log('[login] missing_professor_profile', { email, user_id: user.id });
+                return res.status(500).json({ error: 'Professor profile is missing for this account' });
+            }
             id = profRes.rows[0]?.id;
             details = { professor_id: id };
         }
@@ -76,8 +96,11 @@ exports.login = async (req, res) => {
             { expiresIn: '1d' }
         );
 
+        console.log('[login] success', { email, user_id: user.id, role: user.role, role_id: id });
+
         res.status(200).json({ token, user: { id: user.id, role_id: id, name: user.name, role: user.role } });
     } catch (err) {
+        console.error('[login] server_error', { email, message: err.message });
         console.error(err);
         res.status(500).json({ error: 'Server error' });
     }

@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import Cookies from 'js-cookie';
 import { BookOpen, PlusCircle, ArrowRight, X, Layers, LogOut } from 'lucide-react';
 import api from '@/lib/api';
+import { clearSession, getStoredToken, getStoredUser, setSelectedCourse } from '@/lib/auth';
 
 export default function ProfessorCourses() {
     const [user, setUser] = useState(null);
@@ -27,8 +27,12 @@ export default function ProfessorCourses() {
     ];
 
     useEffect(() => {
-        const u = Cookies.get('user');
-        if (!u) return router.push('/login');
+        const u = getStoredUser();
+        const token = getStoredToken();
+        if (!u || !token) {
+            clearSession();
+            return router.push('/login');
+        }
         const parsed = JSON.parse(u);
         if (parsed.role !== 'professor') return router.push('/student/courses');
         setUser(parsed);
@@ -41,6 +45,9 @@ export default function ProfessorCourses() {
             setCourses(data);
         } catch (err) {
             console.error('Failed to fetch courses', err);
+            if (err?.response?.status === 401) {
+                return;
+            }
         } finally {
             setLoading(false);
         }
@@ -64,14 +71,12 @@ export default function ProfessorCourses() {
 
     const handleSelectCourse = (course) => {
         // Store selected course info for the dashboard
-        Cookies.set('selectedCourse', JSON.stringify(course), { expires: 1 });
+        setSelectedCourse(course);
         router.push(`/professor/dashboard?subjectId=${course.id}`);
     };
 
     const handleLogout = () => {
-        Cookies.remove('token');
-        Cookies.remove('user');
-        Cookies.remove('selectedCourse');
+        clearSession();
         router.push('/login');
     };
 
