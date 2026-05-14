@@ -1,30 +1,58 @@
 "use client";
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
-import Cookies from 'js-cookie';
+import { getStoredToken, getStoredUser, setSession } from '@/lib/auth';
 
 export default function Login() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
-    const router = useRouter();
-
+    const [submitting, setSubmitting] = useState(false);
     const handleLogin = async (e) => {
         e.preventDefault();
+        setError('');
+        setSubmitting(true);
         try {
             const { data } = await api.post('/auth/login', { email, password });
-            Cookies.set('token', data.token, { expires: 1 });
-            Cookies.set('user', JSON.stringify(data.user), { expires: 1 });
-            
-            if (data.user.role === 'student') {
-                router.push('/student/courses');
-            } else {
-                router.push('/professor/courses');
+            console.log('[login] success_response', {
+                role: data?.user?.role,
+                role_id: data?.user?.role_id,
+                hasToken: Boolean(data?.token),
+            });
+
+            if (!data?.token || !data?.user?.role) {
+                throw new Error('Invalid login response from server');
             }
+
+            setSession(data.token, data.user);
+
+            const savedToken = getStoredToken();
+            const savedUser = getStoredUser();
+
+            if (!savedToken || !savedUser) {
+                throw new Error('Session could not be stored in browser cookies');
+            }
+
+            const destination = data.user.role === 'student'
+                ? '/student/courses'
+                : '/professor/courses';
+
+            console.log('[login] redirecting', { destination });
+            window.location.assign(destination);
         } catch (err) {
-            setError(err.response?.data?.error || 'Login failed');
+            console.error('Login failed', {
+                message: err.message,
+                status: err.response?.status,
+                data: err.response?.data,
+            });
+            setError(
+                err.response?.data?.error ||
+                err.response?.data?.message ||
+                `${err.message || 'Login failed'}${err.response?.status ? ` (status ${err.response.status})` : ''}`
+            );
+        } finally {
+            setSubmitting(false);
         }
     };
 
@@ -54,8 +82,12 @@ export default function Login() {
                             onChange={(e) => setPassword(e.target.value)}
                         />
                     </div>
-                    <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition">
-                        Log In
+                    <button
+                        type="submit"
+                        disabled={submitting}
+                        className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {submitting ? 'Logging In...' : 'Log In'}
                     </button>
                 </form>
                 <div className="mt-6 text-center text-sm text-gray-600">

@@ -22,4 +22,5 @@ pool.query('SELECT NOW()')
 
 module.exports = {
   query: (text, params) => pool.query(text, params),
+  getClient: () => pool.connect(),
 };
