@@ -36,7 +36,9 @@ export default function Login() {
 
             const destination = data.user.role === 'student'
                 ? '/student/courses'
-                : '/professor/courses';
+                : data.user.role === 'admin'
+                    ? '/admin/dashboard'
+                    : '/professor/courses';
 
             console.log('[login] redirecting', { destination });
             window.location.assign(destination);

@@ -12,6 +12,18 @@ const DEFAULT_GRADE_RANGES = [
     { grade_code: 'F', min_score: 0, max_score: 34.99 },
 ];
 
+const GRADE_POINT_MAP = {
+    AA: 10,
+    AB: 9,
+    BB: 8,
+    BC: 7,
+    CC: 6,
+    CD: 5,
+    DD: 4,
+    DE: 3,
+    F: 0,
+};
+
 function roundTo(value, decimals = 2) {
     const factor = 10 ** decimals;
     return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
@@ -75,8 +87,117 @@ function assignGrade(score, ranges = []) {
     return null;
 }
 
+function buildCombinedScores({ students = [], exams = [], marksRows = [], schema }) {
+    const normalizedSchema = {
+        ...schema,
+        components: [...(schema.components || [])].sort((a, b) => a.display_order - b.display_order),
+        ranges: normalizeRanges(schema.ranges || []),
+    };
+
+    const selectedComponents = normalizedSchema.components.filter((component) => Number(component.weight_percentage) > 0);
+    const examByType = new Map(exams.map((exam) => [exam.exam_type, exam]));
+    const marksByStudent = new Map();
+
+    marksRows.forEach((row) => {
+        if (!marksByStudent.has(row.student_id)) {
+            marksByStudent.set(row.student_id, new Map());
+        }
+        marksByStudent.get(row.student_id).set(row.exam_type, row);
+    });
+
+    const totalWeight = selectedComponents.reduce((sum, component) => sum + Number(component.weight_percentage), 0);
+
+    return students.map((student) => {
+        const studentMarks = marksByStudent.get(student.student_id) || new Map();
+        let weightedScore = 0;
+        let rawTotal = 0;
+        let rawMax = 0;
+        let missingComponents = 0;
+
+        const componentBreakdown = selectedComponents.map((component) => {
+            const exam = examByType.get(component.exam_type);
+            const markEntry = studentMarks.get(component.exam_type);
+            const maxMarks = Number(exam?.max_marks || 0);
+            const marksObtained = Number(markEntry?.marks_obtained || 0);
+            const percentage = maxMarks > 0 ? roundTo((marksObtained / maxMarks) * 100) : 0;
+            const contribution = totalWeight > 0
+                ? roundTo(percentage * (Number(component.weight_percentage) / totalWeight))
+                : 0;
+
+            if (!markEntry) missingComponents += 1;
+
+            rawTotal += marksObtained;
+            rawMax += maxMarks;
+            weightedScore += contribution;
+
+            return {
+                exam_type: component.exam_type,
+                weight_percentage: Number(component.weight_percentage),
+                max_marks: maxMarks,
+                marks_obtained: marksObtained,
+                percentage,
+                contribution,
+                missing: !markEntry,
+            };
+        });
+
+        const final_percentage = roundTo(weightedScore);
+        const grade_code = assignGrade(final_percentage, normalizedSchema.ranges);
+
+        return {
+            ...student,
+            total_marks_obtained: rawTotal,
+            total_max_marks: rawMax,
+            final_percentage,
+            grade_code,
+            missing_components: missingComponents,
+            component_breakdown: componentBreakdown,
+        };
+    }).sort((a, b) => {
+        if (b.final_percentage !== a.final_percentage) return b.final_percentage - a.final_percentage;
+        return (a.roll_no || '').localeCompare(b.roll_no || '');
+    }).map((student, index) => ({
+        ...student,
+        rank: index + 1,
+    }));
+}
+
+function buildCombinedAnalytics(combinedScores = []) {
+    const scores = combinedScores.map((student) => Number(student.final_percentage || 0));
+    const gradeDistribution = Object.fromEntries(GRADE_SCALE.map((grade) => [grade, 0]));
+
+    combinedScores.forEach((student) => {
+        if (student.grade_code && gradeDistribution[student.grade_code] !== undefined) {
+            gradeDistribution[student.grade_code] += 1;
+        }
+    });
+
+    const histogram = Array.from({ length: 10 }, (_, index) => {
+        const start = index * 10;
+        const end = index === 9 ? 100 : (index + 1) * 10;
+        const count = scores.filter((score) => (
+            index === 9 ? score >= start && score <= end : score >= start && score < end
+        )).length;
+
+        return { range: `${start}-${end}`, count };
+    });
+
+    return {
+        count: combinedScores.length,
+        average: scores.length ? roundTo(scores.reduce((sum, value) => sum + value, 0) / scores.length) : 0,
+        median: calculateMedian(scores),
+        max: scores.length ? roundTo(Math.max(...scores)) : 0,
+        min: scores.length ? roundTo(Math.min(...scores)) : 0,
+        std_dev: calculateStdDev(scores),
+        missing_any_component: combinedScores.filter((student) => student.missing_components > 0).length,
+        grade_distribution: gradeDistribution,
+        score_distribution: histogram,
+    };
+}
+
 module.exports = {
     GRADE_SCALE,
+    GRADE_POINT_MAP,
     DEFAULT_GRADE_RANGES,
     roundTo,
     calculateMedian,
@@ -84,4 +205,6 @@ module.exports = {
     buildDefaultComponents,
     normalizeRanges,
     assignGrade,
+    buildCombinedScores,
+    buildCombinedAnalytics,
 };

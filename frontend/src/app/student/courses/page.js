@@ -91,6 +91,12 @@ export default function StudentCourses() {
                         </div>
                     </div>
                     <div className="flex items-center gap-4">
+                        <button
+                            onClick={() => router.push('/student/registration')}
+                            className="hidden sm:inline-flex items-center gap-2 px-3 py-2 text-sm text-emerald-300 hover:text-white hover:bg-slate-800 rounded-lg transition-all duration-200"
+                        >
+                            Semester Registration
+                        </button>
                         <span className="text-sm text-slate-300 hidden sm:block">Welcome, <span className="font-semibold text-white">{user.name}</span></span>
                         <button
                             onClick={handleLogout}
@@ -108,7 +114,7 @@ export default function StudentCourses() {
                 {/* Title Section */}
                 <div className="mb-10">
                     <h2 className="text-3xl font-bold text-white mb-2">My Courses</h2>
-                    <p className="text-slate-400">Select a course to view attendance, quizzes, marks and more.</p>
+                    <p className="text-slate-400">Select a course to view attendance, quizzes, marks and more, or complete semester registration before classes begin.</p>
                 </div>
 
                 {/* Course Grid */}

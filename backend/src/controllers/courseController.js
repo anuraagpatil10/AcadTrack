@@ -5,7 +5,12 @@ exports.getCourses = async (req, res) => {
     try {
         const professorId = req.user.role_id;
         const result = await db.query(
-            'SELECT id, name, code FROM subjects WHERE professor_id = $1 ORDER BY id DESC',
+            `SELECT s.id, s.name, s.code, s.credits, s.course_type, s.elective_group,
+                    sem.id AS semester_id, sem.name AS semester_name, sem.department, sem.semester_no
+             FROM subjects s
+             LEFT JOIN semesters sem ON s.semester_id = sem.id
+             WHERE s.professor_id = $1
+             ORDER BY sem.semester_no NULLS LAST, s.code, s.name`,
             [professorId]
         );
         res.status(200).json(result.rows);
@@ -178,13 +183,16 @@ exports.getStudentCourses = async (req, res) => {
 
         const studentId = studentRes.rows[0].id;
         const result = await db.query(
-            `SELECT s.id, s.name, s.code, u.name AS professor_name
+            `SELECT s.id, s.name, s.code, s.credits, s.course_type, s.elective_group,
+                    sem.id AS semester_id, sem.name AS semester_name, sem.department, sem.semester_no,
+                    u.name AS professor_name
              FROM enrollments e
              JOIN subjects s ON e.subject_id = s.id
+             LEFT JOIN semesters sem ON s.semester_id = sem.id
              JOIN professors p ON s.professor_id = p.id
              JOIN users u ON p.user_id = u.id
              WHERE e.student_id = $1
-             ORDER BY s.name`,
+             ORDER BY sem.semester_no NULLS LAST, s.name`,
             [studentId]
         );
         res.status(200).json(result.rows);

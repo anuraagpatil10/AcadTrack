@@ -27,7 +27,7 @@ function getLegacyGrade(percentage) {
 
 async function ensureProfessorOwnsSubject(subjectId, professorId) {
     const result = await db.query(
-        'SELECT id, name, code FROM subjects WHERE id = $1 AND professor_id = $2',
+        'SELECT id, name, code, semester_id FROM subjects WHERE id = $1 AND professor_id = $2',
         [subjectId, professorId]
     );
 
@@ -479,6 +479,12 @@ exports.uploadMarks = async (req, res) => {
                  WHERE subject_id = $1`,
                 [subject_id]
             );
+            if (subject.semester_id) {
+                await client.query(
+                    'UPDATE semesters SET gradesheet_released = FALSE WHERE id = $1',
+                    [subject.semester_id]
+                );
+            }
 
             await client.query('COMMIT');
 
@@ -647,6 +653,13 @@ exports.saveGradingSchema = async (req, res) => {
                 );
             }
 
+            if (subject.semester_id) {
+                await client.query(
+                    'UPDATE semesters SET gradesheet_released = FALSE WHERE id = $1',
+                    [subject.semester_id]
+                );
+            }
+
             await client.query('COMMIT');
         } catch (err) {
             await client.query('ROLLBACK');
@@ -718,6 +731,12 @@ exports.unreleaseGrades = async (req, res) => {
              WHERE subject_id = $1`,
             [id]
         );
+        if (subject.semester_id) {
+            await db.query(
+                'UPDATE semesters SET gradesheet_released = FALSE WHERE id = $1',
+                [subject.semester_id]
+            );
+        }
 
         const refreshed = await getGradingDashboard(id);
         res.status(200).json({

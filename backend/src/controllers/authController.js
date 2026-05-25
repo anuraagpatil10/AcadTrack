@@ -6,7 +6,7 @@ exports.register = async (req, res) => {
     const { name, email, password, role, roll_no, department, semester } = req.body;
 
     try {
-        if (!['student', 'professor'].includes(role)) {
+        if (!['student', 'professor', 'admin'].includes(role)) {
             return res.status(400).json({ error: 'Invalid role' });
         }
 
@@ -28,6 +28,11 @@ exports.register = async (req, res) => {
             await db.query(
                 'INSERT INTO professors (user_id, department) VALUES ($1, $2)',
                 [userId, department]
+            );
+        } else if (role === 'admin') {
+            await db.query(
+                'INSERT INTO admins (user_id, department) VALUES ($1, $2)',
+                [userId, department || 'ALL']
             );
         }
 
@@ -88,6 +93,14 @@ exports.login = async (req, res) => {
             }
             id = profRes.rows[0]?.id;
             details = { professor_id: id };
+        } else if (user.role === 'admin') {
+            const adminRes = await db.query('SELECT id FROM admins WHERE user_id = $1', [user.id]);
+            if (adminRes.rows.length === 0) {
+                console.log('[login] missing_admin_profile', { email, user_id: user.id });
+                return res.status(500).json({ error: 'Admin profile is missing for this account' });
+            }
+            id = adminRes.rows[0]?.id;
+            details = { admin_id: id };
         }
 
         const token = jwt.sign(

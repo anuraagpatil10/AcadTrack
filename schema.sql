@@ -6,7 +6,7 @@ CREATE TABLE users (
     name VARCHAR(100),
     email VARCHAR(100) UNIQUE,
     password TEXT,
-    role VARCHAR(20) CHECK (role IN ('student', 'professor')),
+    role VARCHAR(20) CHECK (role IN ('student', 'professor', 'admin')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -24,11 +24,35 @@ CREATE TABLE professors (
     department VARCHAR(50)
 );
 
+CREATE TABLE admins (
+    id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES users(id) ON DELETE CASCADE,
+    department VARCHAR(50) DEFAULT 'ALL'
+);
+
+CREATE TABLE semesters (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(120) NOT NULL,
+    department VARCHAR(50) NOT NULL,
+    semester_no INT NOT NULL,
+    total_credits INT NOT NULL CHECK (total_credits > 0),
+    registration_open BOOLEAN DEFAULT FALSE,
+    gradesheet_released BOOLEAN DEFAULT FALSE,
+    created_by INT REFERENCES admins(id),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(department, semester_no, name)
+);
+
 CREATE TABLE subjects (
     id SERIAL PRIMARY KEY,
     name VARCHAR(100),
     code VARCHAR(20),
-    professor_id INT REFERENCES professors(id)
+    professor_id INT REFERENCES professors(id),
+    semester_id INT REFERENCES semesters(id) ON DELETE CASCADE,
+    credits INT DEFAULT 4 CHECK (credits > 0),
+    course_type VARCHAR(20) DEFAULT 'compulsory' CHECK (course_type IN ('compulsory', 'elective')),
+    elective_group VARCHAR(50),
+    is_active BOOLEAN DEFAULT TRUE
 );
 
 CREATE TABLE enrollments (
@@ -36,6 +60,23 @@ CREATE TABLE enrollments (
     student_id INT REFERENCES students(id),
     subject_id INT REFERENCES subjects(id),
     UNIQUE(student_id, subject_id)
+);
+
+CREATE TABLE semester_registrations (
+    id SERIAL PRIMARY KEY,
+    semester_id INT REFERENCES semesters(id) ON DELETE CASCADE,
+    student_id INT REFERENCES students(id) ON DELETE CASCADE,
+    total_credits INT NOT NULL DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'registered' CHECK (status IN ('registered', 'cancelled')),
+    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(semester_id, student_id)
+);
+
+CREATE TABLE semester_registration_courses (
+    id SERIAL PRIMARY KEY,
+    registration_id INT REFERENCES semester_registrations(id) ON DELETE CASCADE,
+    subject_id INT REFERENCES subjects(id) ON DELETE CASCADE,
+    UNIQUE(registration_id, subject_id)
 );
 
 CREATE TABLE attendance_sessions (
@@ -185,6 +226,28 @@ CREATE TABLE grading_schema_ranges (
     max_score NUMERIC(5,2) NOT NULL CHECK (max_score >= 0 AND max_score <= 100),
     display_order INT DEFAULT 0,
     UNIQUE(schema_id, grade_code)
+);
+
+CREATE TABLE semester_grade_sheets (
+    id SERIAL PRIMARY KEY,
+    semester_id INT REFERENCES semesters(id) ON DELETE CASCADE,
+    student_id INT REFERENCES students(id) ON DELETE CASCADE,
+    total_credits INT NOT NULL,
+    total_grade_points NUMERIC(8,2) NOT NULL,
+    spi NUMERIC(5,2) NOT NULL,
+    released_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(semester_id, student_id)
+);
+
+CREATE TABLE semester_grade_sheet_courses (
+    id SERIAL PRIMARY KEY,
+    grade_sheet_id INT REFERENCES semester_grade_sheets(id) ON DELETE CASCADE,
+    subject_id INT REFERENCES subjects(id) ON DELETE CASCADE,
+    credits INT NOT NULL,
+    grade_code VARCHAR(2) NOT NULL,
+    grade_point_value INT NOT NULL,
+    course_grade_points NUMERIC(8,2) NOT NULL,
+    UNIQUE(grade_sheet_id, subject_id)
 );
 
 CREATE TABLE assignments (

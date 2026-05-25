@@ -38,6 +38,7 @@ export default function Register() {
                     <select name="role" className="w-full p-3 border rounded-lg outline-none" onChange={handleChange}>
                         <option value="student">Student</option>
                         <option value="professor">Professor</option>
+                        <option value="admin">Admin</option>
                     </select>
 
                     <input name="department" placeholder="Department (e.g., CS)" required className="w-full p-3 border rounded-lg outline-none" onChange={handleChange} />
