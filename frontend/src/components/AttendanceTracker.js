@@ -1,16 +1,19 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
+import Webcam from 'react-webcam';
 import api from '@/lib/api';
-import { MapPin, Play, Square, Clock, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { MapPin, Play, Square, Clock, AlertCircle, CheckCircle2, Camera } from 'lucide-react';
 
 export default function AttendanceTracker({ subjectId }) {
-    const [status, setStatus] = useState('idle'); // idle, active, completed
+    const [status, setStatus] = useState('idle'); // idle, capturing, active, completed
     const [sessionId, setSessionId] = useState(null);
     const [timer, setTimer] = useState(0);
     const [todayClasses, setTodayClasses] = useState(null);
     const [loading, setLoading] = useState(true);
     const [distanceStr, setDistanceStr] = useState(null);
+    const webcamRef = useRef(null);
+    const [verifyLoading, setVerifyLoading] = useState(false);
 
     // Fetch today's class schedule
     useEffect(() => {
@@ -44,13 +47,21 @@ export default function AttendanceTracker({ subjectId }) {
         return currentTime > c.end_time?.slice(0, 5);
     }) || [];
 
-    const startSession = async () => {
+    const initiateCapture = () => {
+        setStatus('capturing');
+    };
+
+    const confirmStartSession = async () => {
         if (!navigator.geolocation) return alert('Geolocation is not supported by your browser');
 
+        const live_selfie = webcamRef.current?.getScreenshot();
+        if (!live_selfie) return alert('Failed to capture image. Please try again.');
+
+        setVerifyLoading(true);
         navigator.geolocation.getCurrentPosition(async (position) => {
             const { latitude, longitude } = position.coords;
             try {
-                const { data } = await api.post('/attendance/start', { subject_id: subjectId, latitude, longitude });
+                const { data } = await api.post('/attendance/start', { subject_id: subjectId, latitude, longitude, live_selfie });
                 setSessionId(data.session_id);
                 if (data.current_distance !== null && data.current_distance !== undefined) {
                     setDistanceStr(`${Math.round(data.current_distance)}m`);
@@ -59,10 +70,15 @@ export default function AttendanceTracker({ subjectId }) {
                 }
                 setStatus('active');
             } catch (err) {
-                alert('Failed to start session');
+                alert(err.response?.data?.error || 'Failed to start session. Ensure you are close to the professor and your face matches.');
+                setStatus('idle');
+            } finally {
+                setVerifyLoading(false);
             }
         }, () => {
             alert('Please allow location access to mark attendance.');
+            setVerifyLoading(false);
+            setStatus('idle');
         });
     };
 
@@ -216,9 +232,44 @@ export default function AttendanceTracker({ subjectId }) {
                         </div>
                         <div>
                             {status === 'idle' && activeClass && (
-                                <button onClick={startSession} className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium transition-colors">
+                                <button onClick={initiateCapture} className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-medium transition-colors">
                                     <Play size={18}/> Start Session
                                 </button>
+                            )}
+                            {status === 'capturing' && (
+                                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                                    <div className="bg-slate-800 p-6 rounded-2xl max-w-sm w-full border border-slate-700 shadow-2xl">
+                                        <h4 className="text-white font-bold text-xl mb-2 flex items-center gap-2">
+                                            <Camera size={24} className="text-emerald-400"/> Biometric Verification
+                                        </h4>
+                                        <p className="text-slate-400 text-sm mb-4">Please look into the camera to verify your identity.</p>
+                                        <div className="relative rounded-xl overflow-hidden mb-4 bg-black border border-slate-700">
+                                            <Webcam
+                                                audio={false}
+                                                ref={webcamRef}
+                                                screenshotFormat="image/jpeg"
+                                                videoConstraints={{ facingMode: "user" }}
+                                                className="w-full h-auto"
+                                            />
+                                        </div>
+                                        <div className="flex gap-3">
+                                            <button 
+                                                onClick={() => setStatus('idle')} 
+                                                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white font-semibold py-2.5 rounded-xl transition-colors"
+                                                disabled={verifyLoading}
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button 
+                                                onClick={confirmStartSession} 
+                                                className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-50 flex justify-center items-center gap-2"
+                                                disabled={verifyLoading}
+                                            >
+                                                {verifyLoading ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : 'Verify & Start'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
                             )}
                             {status === 'active' && (
                                 <div className="flex items-center gap-4">

@@ -2,15 +2,17 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { BookOpen, ArrowRight, Layers, LogOut, GraduationCap, ChevronDown, Filter } from 'lucide-react';
+import { BookOpen, ArrowRight, Layers, LogOut, GraduationCap, ChevronDown, Filter, Camera } from 'lucide-react';
 import api from '@/lib/api';
 import { clearSession, getStoredToken, getStoredUser, setSelectedCourse } from '@/lib/auth';
+import FaceRegistration from '@/components/FaceRegistration';
 
 export default function StudentCourses() {
     const [user, setUser] = useState(null);
     const [courses, setCourses] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedSemester, setSelectedSemester] = useState('all');
+    const [showFaceRegistration, setShowFaceRegistration] = useState(false);
     const router = useRouter();
 
     const cardColors = [
@@ -129,6 +131,13 @@ export default function StudentCourses() {
                             className="hidden sm:inline-flex items-center gap-2 px-3 py-2 text-sm text-blue-300 hover:text-white hover:bg-slate-800 rounded-lg transition-all duration-200"
                         >
                             Grade Sheets
+                        </button>
+                        <button
+                            onClick={() => setShowFaceRegistration(true)}
+                            className="hidden sm:inline-flex items-center gap-2 px-3 py-2 text-sm text-purple-300 hover:text-white hover:bg-slate-800 rounded-lg transition-all duration-200"
+                        >
+                            <Camera size={16} />
+                            Register Face
                         </button>
                         <span className="text-sm text-slate-300 hidden sm:block">Welcome, <span className="font-semibold text-white">{user.name}</span></span>
                         <button
@@ -256,6 +265,21 @@ export default function StudentCourses() {
                     </div>
                 )}
             </main>
+
+            {/* Face Registration Modal */}
+            {showFaceRegistration && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+                    <div className="relative w-full max-w-md">
+                        <FaceRegistration onComplete={() => setShowFaceRegistration(false)} />
+                        <button 
+                            onClick={() => setShowFaceRegistration(false)} 
+                            className="absolute -top-10 right-0 text-slate-400 hover:text-white transition-colors"
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -15,7 +15,10 @@ CREATE TABLE students (
     user_id INT REFERENCES users(id) ON DELETE CASCADE,
     roll_no VARCHAR(50),
     department VARCHAR(50),
-    semester INT
+    semester INT,
+    profile_image_url TEXT,
+    face_embeddings JSONB DEFAULT '[]'::jsonb,
+    embedding_model VARCHAR(50) DEFAULT 'Facenet512'
 );
 
 CREATE TABLE professors (
@@ -85,7 +88,12 @@ CREATE TABLE attendance_sessions (
     subject_id INT REFERENCES subjects(id),
     start_time TIMESTAMP,
     end_time TIMESTAMP,
-    is_valid BOOLEAN
+    is_valid BOOLEAN,
+    verification_status VARCHAR(20) DEFAULT 'pending',
+    face_match_score FLOAT,
+    verification_timestamp TIMESTAMP,
+    accumulated_valid_time INT DEFAULT 0,
+    biometric_state VARCHAR(20)
 );
 
 CREATE TABLE lecture_sessions (

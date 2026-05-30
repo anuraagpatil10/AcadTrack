@@ -1,4 +1,8 @@
 const db = require('../config/db');
+const axios = require('axios');
+const cloudinaryService = require('../services/cloudinaryService');
+
+const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:5001';
 
 // --- Helper Functions ---
 function haversineDistance(lat1, lon1, lat2, lon2) {
@@ -188,30 +192,100 @@ exports.completeLectureSession = async (req, res) => {
 };
 
 // --- Student Endpoints ---
+exports.registerFace = async (req, res) => {
+    const { image_base64 } = req.body;
+    const student_id = req.user.role_id;
+    if (!image_base64) return res.status(400).json({ error: 'No image provided' });
+
+    try {
+        const public_id = `profile_${Date.now()}`;
+        const folder = `students/student_${student_id}`;
+        
+        // 1. Upload to Cloudinary
+        const imageUrl = await cloudinaryService.uploadImage(image_base64, folder, public_id);
+        
+        // 2. Generate embedding via Python service
+        const pythonRes = await axios.post(`${PYTHON_SERVICE_URL}/register-face`, {
+            image_url: imageUrl
+        });
+        const embedding = pythonRes.data.embedding;
+        const model = pythonRes.data.model;
+
+        // 3. Append to Database
+        const studentRes = await db.query('SELECT face_embeddings FROM students WHERE id = $1', [student_id]);
+        let embeddings = [];
+        if (studentRes.rows.length > 0 && studentRes.rows[0].face_embeddings) {
+            embeddings = typeof studentRes.rows[0].face_embeddings === 'string' 
+                         ? JSON.parse(studentRes.rows[0].face_embeddings) 
+                         : studentRes.rows[0].face_embeddings;
+        }
+        embeddings.push(embedding);
+
+        await db.query(
+            'UPDATE students SET profile_image_url = $1, face_embeddings = $2::jsonb, embedding_model = $3 WHERE id = $4',
+            [imageUrl, JSON.stringify(embeddings), model, student_id]
+        );
+
+        res.status(200).json({ message: 'Face registered successfully', image_url: imageUrl });
+    } catch (err) {
+        console.error('Face registration error:', err.response?.data || err.message);
+        res.status(500).json({ error: err.response?.data?.error || 'Registration failed' });
+    }
+};
+
 exports.startSession = async (req, res) => {
-    const { subject_id, latitude, longitude } = req.body;
+    const { subject_id, latitude, longitude, live_selfie } = req.body;
     const student_id = req.user.role_id;
 
     try {
+        // 1. GPS Validation First
+        const current_distance = await fetchCurrentDistance(subject_id, latitude, longitude);
+        if (current_distance === null) {
+            return res.status(400).json({ error: 'Professor has not started the session yet or location invalid.' });
+        }
+        if (current_distance > 30) {
+            return res.status(403).json({ error: `You are too far from the professor (${Math.round(current_distance)}m). You must be within 30m.` });
+        }
+
+        // 2. Biometric Verification
+        if (!live_selfie) return res.status(400).json({ error: 'Live selfie required for biometric verification.' });
+
+        const studentRes = await db.query('SELECT face_embeddings FROM students WHERE id = $1', [student_id]);
+        if (studentRes.rows.length === 0 || !studentRes.rows[0].face_embeddings || studentRes.rows[0].face_embeddings.length === 0) {
+            return res.status(403).json({ error: 'No registered face found. Please register your face first.' });
+        }
+        
+        const reference_embeddings = typeof studentRes.rows[0].face_embeddings === 'string' 
+                                     ? JSON.parse(studentRes.rows[0].face_embeddings) 
+                                     : studentRes.rows[0].face_embeddings;
+
+        const pythonRes = await axios.post(`${PYTHON_SERVICE_URL}/verify-face`, {
+            live_image_base64: live_selfie,
+            reference_embeddings: reference_embeddings
+        });
+
+        if (!pythonRes.data.verified) {
+            return res.status(403).json({ error: 'Face verification failed. Identity mismatch.' });
+        }
+
+        // 3. Create Valid Session
         const result = await db.query(
-            'INSERT INTO attendance_sessions (student_id, subject_id, start_time, is_valid) VALUES ($1, $2, CURRENT_TIMESTAMP, $3) RETURNING id',
-            [student_id, subject_id, true]
+            `INSERT INTO attendance_sessions (student_id, subject_id, start_time, is_valid, verification_status, face_match_score, verification_timestamp, biometric_state) 
+             VALUES ($1, $2, CURRENT_TIMESTAMP, $3, $4, $5, CURRENT_TIMESTAMP, 'verified') RETURNING id`,
+            [student_id, subject_id, true, 'verified', pythonRes.data.confidence]
         );
         const session_id = result.rows[0].id;
 
-        if (latitude && longitude) {
-            await db.query(
-                'INSERT INTO student_location_pings (attendance_session_id, latitude, longitude) VALUES ($1, $2, $3)',
-                [session_id, latitude, longitude]
-            );
-        }
+        // 4. Record Initial Ping
+        await db.query(
+            'INSERT INTO student_location_pings (attendance_session_id, latitude, longitude) VALUES ($1, $2, $3)',
+            [session_id, latitude, longitude]
+        );
 
-        const current_distance = await fetchCurrentDistance(subject_id, latitude, longitude);
-
-        res.status(200).json({ session_id, message: 'Session started', current_distance });
+        res.status(200).json({ session_id, message: 'Session started & Identity Verified', current_distance });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Server error' });
+        console.error('Start Session Error:', err.response?.data || err.message);
+        res.status(500).json({ error: err.response?.data?.error || 'Server error' });
     }
 };
 
@@ -248,13 +322,17 @@ exports.completeSession = async (req, res) => {
         );
 
         const result = await db.query(
-            'SELECT subject_id, start_time, end_time FROM attendance_sessions WHERE id = $1',
+            'SELECT subject_id, start_time, end_time, verification_status FROM attendance_sessions WHERE id = $1',
             [session_id]
         );
 
         if (result.rows.length === 0) return res.status(404).json({ error: 'Session not found' });
 
         const session = result.rows[0];
+        
+        if (session.verification_status !== 'verified') {
+            return res.status(403).json({ error: 'Session lacking biometric verification' });
+        }
         
         // 1. Get Scheduled Total Duration
         const today = new Date();

@@ -3,6 +3,7 @@ const router = express.Router();
 const attendanceController = require('../controllers/attendanceController');
 const authMiddleware = require('../middlewares/auth');
 
+router.post('/register-face', authMiddleware(['student']), attendanceController.registerFace);
 router.post('/start', authMiddleware(['student']), attendanceController.startSession);
 router.post('/ping', authMiddleware(['student']), attendanceController.pingSession);
 router.post('/complete', authMiddleware(['student']), attendanceController.completeSession);
